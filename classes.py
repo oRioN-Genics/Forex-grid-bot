@@ -1,3 +1,4 @@
+import threading
 import MetaTrader5 as mt5
 import pandas as pd
 
@@ -7,6 +8,7 @@ class Bot:
         self.volume = volume
         self.no_of_levels = no_of_levels
         self.profit_target = profit_target
+        self.stop_event = threading.Event()
 
     def buy_limit(self, symbol, volume, price):
         response = mt5.order_send({
@@ -37,9 +39,6 @@ class Bot:
             "type_filling": mt5.ORDER_FILLING_IOC,
         })
         print(response)
-
-    """sell_limit('EURUSD', 0.01, 1.08630)
-    buy_limit('EURUSD', 0.01, 1.08380)"""
 
     def cal_profit(self, symbol):
         positions = mt5.positions_get(symbol=symbol)
@@ -79,12 +78,7 @@ class Bot:
         volume = float(df['volume'].sum())
         return volume
 
-    """profit = cal_buyprofit('EURUSD')
-    volume = cal_volume('EURUSD')
-    print(profit)
-    print(volume)"""
-
-    def cal_buy_margin(self, symbol):
+    def cal_buy_margin(self, symbol) -> float:
         positions = mt5.positions_get(symbol=symbol)
         df = pd.DataFrame(list(positions), columns=positions[0]._asdict().keys())
         df['time'] = pd.to_datetime(df['time'], unit='s')
@@ -102,7 +96,7 @@ class Bot:
             sum = 0.0
         return float(sum)
 
-    def cal_sell_margin(self, symbol):
+    def cal_sell_margin(self, symbol) -> float:
         positions = mt5.positions_get(symbol=symbol)
         df = pd.DataFrame(list(positions), columns=positions[0]._asdict().keys())
         df['time'] = pd.to_datetime(df['time'], unit='s')
@@ -120,27 +114,17 @@ class Bot:
             sum = 0.0
         return float(sum)
 
-    """margin_b = cal_buy_margin('EURUSD')
-    print(margin_b)
-    margin_s = cal_sell_margin('EURUSD')
-    print(margin_s)"""
-
-    def cal_buy_pct_profit(self, symbol) -> float:
+    def cal_buy_pct_profit(self, symbol):
         profit = self.cal_buy_profit(symbol)
         margin_b = self.cal_buy_margin(symbol)
-        pct_profit = float((profit / margin_b) * 100)
-        return pct_profit
+        pct_profit = (profit / margin_b) * 100
+        return float(pct_profit)
 
-    def cal_sell_pct_profit(self, symbol) -> float:
+    def cal_sell_pct_profit(self, symbol):
         profit = self.cal_sell_profit(symbol)
         margin_s = self.cal_sell_margin(symbol)
-        pct_profit = float((profit / margin_s) * 100)
-        return pct_profit
-
-    """pct_b = cal_buy_pct_profit("EURUSD")
-    pct_s = cal_sell_pct_profit("EURUSD")
-    print(pct_b)
-    print(pct_s)"""
+        pct_profit = (profit / margin_s) * 100
+        return float(pct_profit)
 
     def close_position(self, position):
         tick = mt5.symbol_info_tick(position.symbol)
@@ -167,7 +151,6 @@ class Bot:
         for i in positions:
             self.close_position(i)
 
-    # close_all('EURUSD')
 
     def delete_pending(self, tickets):
         close_request = {
@@ -193,8 +176,6 @@ class Bot:
         for ticket in df.ticket:
             self.delete_pending(ticket)
 
-    # close_all_pending("EURUSD")
-
     def draw_grid(self, symbol, volume, no_of_levels):
         pct_change_sell = 1
         tick = mt5.symbol_info_tick(symbol)
@@ -215,34 +196,32 @@ class Bot:
             pct_change_buy -= 1
 
     def run(self):
-        self.draw_grid(self.symbol, self.volume, self.no_of_levels)
+        while not self.stop_event.is_set():
+            self.draw_grid(self.symbol, self.volume, self.no_of_levels)
 
-        while True:
-            positions = mt5.positions_get(symbol=self.symbol)
-            if len(positions) > 0:
-                margin_s = float(self.cal_sell_margin(self.symbol))
-                margin_b = float(self.cal_buy_margin(self.symbol))
+            while True:
+                positions = mt5.positions_get(symbol=self.symbol)
+                if len(positions) > 0:
+                    margin_s = self.cal_sell_margin(self.symbol)
+                    margin_b = self.cal_buy_margin(self.symbol)
 
-                if margin_s > 0:
-                    try:
-                        pct_profit_sell = float(self.cal_sell_pct_profit(self.symbol))
-                        if pct_profit_sell >= self.profit_target:
-                            self.close_all(self.symbol)
-                    except:
-                        pass
+                    if margin_s > 0:
+                        try:
+                            pct_profit_sell = self.cal_sell_pct_profit(self.symbol)
+                            if pct_profit_sell >= self.profit_target:
+                                self.close_all(self.symbol)
+                        except:
+                            pass
 
-                if margin_b > 0:
-                    try:
-                        pct_profit_buy = float(self.cal_buy_pct_profit(self.symbol))
-                        if pct_profit_buy >= self.profit_target:
-                            self.close_all(self.symbol)
-                    except:
-                        pass
+                    if margin_b > 0:
+                        try:
+                            pct_profit_buy = self.cal_buy_pct_profit(self.symbol)
+                            if pct_profit_buy >= self.profit_target:
+                                self.close_all(self.symbol)
+                        except:
+                            pass
 
-            """positions = mt5.positions_get(symbol=self.symbol)
-            if len(positions) == 0:
-                try:
-                    self.close_all_pending(self.symbol)
-                    break
-                except:
-                    pass"""
+    def stop(self):
+        self.stop_event.set()
+        self.close_all(self.symbol)
+        self.close_all_pending(self.symbol)
